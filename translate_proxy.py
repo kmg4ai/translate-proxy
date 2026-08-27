@@ -327,3 +327,137 @@ def translate_openai_messages(body, cfg, call_backend=None):
             continue
         msg["content"] = _translate_content(msg.get("content"), cfg, call_backend)
     return body
+
+
+def _ev(event, data_dict=None, data_str=None):
+    data = data_str if data_str is not None else json.dumps(data_dict, ensure_ascii=False)
+    return {"event": event, "data": data}
+
+
+def parse_sse(raw):
+    """bytes -> list of {'event': str|None, 'data': str}"""
+    events = []
+    for block in raw.decode("utf-8").split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        ev = None
+        data_lines = []
+        for line in block.split("\n"):
+            if line.startswith("event:"):
+                ev = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[len("data:"):].strip())
+        events.append({"event": ev, "data": "\n".join(data_lines)})
+    return events
+
+
+def encode_sse(events):
+    out = []
+    for ev in events:
+        lines = []
+        if ev.get("event"):
+            lines.append("event: " + ev["event"])
+        lines.append("data: " + ev["data"])
+        out.append("\n".join(lines) + "\n\n")
+    return "".join(out).encode("utf-8")
+
+
+def translate_anthropic_stream(events, cfg, call_backend=None):
+    out = []
+    buffer = None
+    for ev in events:
+        etype = ev.get("event")
+        data = None
+        if ev.get("data") and ev["data"].lstrip().startswith("{"):
+            try:
+                data = json.loads(ev["data"])
+            except ValueError:
+                data = None
+        if etype == "content_block_start" and data and data.get("content_block", {}).get("type") == "text":
+            buffer = {"index": data["index"], "text": ""}
+            out.append(ev)
+            if cfg.placeholder:
+                d = {"type": "text_delta", "index": buffer["index"], "delta": {"type": "text_delta", "text": cfg.placeholder}}
+                out.append(_ev("text_delta", d))
+        elif etype == "text_delta" and buffer and data and data.get("index") == buffer["index"]:
+            buffer["text"] += data.get("delta", {}).get("text", "")
+        elif etype == "content_block_stop" and buffer and data and data.get("index") == buffer["index"]:
+            translated = translate_text(buffer["text"], cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend)
+            d = {"type": "text_delta", "index": buffer["index"], "delta": {"type": "text_delta", "text": translated}}
+            out.append(_ev("text_delta", d))
+            out.append(ev)
+            buffer = None
+        else:
+            out.append(ev)
+    if buffer is not None:
+        translated = translate_text(buffer["text"], cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend)
+        d = {"type": "text_delta", "index": buffer["index"], "delta": {"type": "text_delta", "text": translated}}
+        out.append(_ev("text_delta", d))
+        out.append(_ev("content_block_stop", {"type": "content_block_stop", "index": buffer["index"]}))
+    return out
+
+
+def translate_openai_stream(chunks, cfg, call_backend=None):
+    meta = None
+    texts = []
+    role = None
+    finish = None
+    usage = None
+    for c in chunks:
+        if not isinstance(c, dict):
+            continue
+        choices = c.get("choices")
+        if choices:
+            if meta is None:
+                meta = {k: v for k, v in c.items() if k != "choices"}
+            for ch in choices:
+                delta = ch.get("delta") or {}
+                if delta.get("role"):
+                    role = delta["role"]
+                if delta.get("content"):
+                    texts.append(delta["content"])
+                if ch.get("finish_reason"):
+                    finish = c
+        if c.get("usage"):
+            usage = c
+    full = "".join(texts)
+    translated = translate_text(full, cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend) if full else ""
+
+    def chunk(content, role=None, finish_reason=None):
+        delta = {}
+        if role is not None:
+            delta["role"] = role
+        if content is not None:
+            delta["content"] = content
+        ch = {"index": 0, "delta": delta}
+        if finish_reason is not None:
+            ch["finish_reason"] = finish_reason
+        return dict(meta, choices=[ch]) if meta else {"choices": [ch]}
+
+    out = []
+    if role:
+        out.append(chunk("", role=role))
+    if full and cfg.placeholder:
+        out.append(chunk(cfg.placeholder))
+    out.append(chunk(translated))
+    if finish:
+        out.append(finish)
+    if usage:
+        out.append(usage)
+    return out
+
+
+def translate_anthropic_nonstream(body, cfg, call_backend=None):
+    for blk in body.get("content", []):
+        if isinstance(blk, dict) and blk.get("type") == "text":
+            blk["text"] = translate_text(blk.get("text", ""), cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend)
+    return body
+
+
+def translate_openai_nonstream(body, cfg, call_backend=None):
+    for choice in body.get("choices", []):
+        msg = choice.get("message")
+        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+            msg["content"] = translate_text(msg["content"], cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend)
+    return body

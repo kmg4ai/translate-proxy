@@ -273,3 +273,94 @@ class IngressTests(unittest.TestCase):
         self.assertEqual(out["messages"][0]["content"], "TRANS:szybko policz")
         self.assertEqual(out["messages"][1]["tool_calls"][0]["function"]["name"], "calc")
         self.assertEqual(out["messages"][2]["content"], "2")
+
+import json
+
+from translate_proxy import (Config, TranslatorError, clear_cache, encode_sse,
+                             parse_sse, translate_anthropic_nonstream,
+                             translate_anthropic_stream, translate_openai_nonstream,
+                             translate_openai_stream)
+
+
+class EgressTests(unittest.TestCase):
+    def setUp(self):
+        clear_cache()
+
+    def _cfg(self):
+        return Config(port=8800, upstream="u", verbose=False, placeholder="…",
+                      user_lang="pl", user_lang_name="Polish",
+                      model_lang="en", model_lang_name="English",
+                      translator="openrouter", translator_model="m", translator_fallback=[],
+                      translate_history=True, cache_size=5, guard_ratio=0.3,
+                      translator_timeout=60, upstream_timeout=300, cerebras_base="c")
+
+    def fake(self, repl="Przetlumaczone."):
+        return lambda backend, model, prompt, text, cfg: repl
+
+    def never(self):
+        return lambda *a: (_ for _ in ()).throw(AssertionError("must not call backend"))
+
+    def test_anthropic_stream_text_then_tool_use(self):
+        events = [
+            {"event": "content_block_start", "data": json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})},
+            {"event": "text_delta", "data": json.dumps({"type": "text_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello "}})},
+            {"event": "text_delta", "data": json.dumps({"type": "text_delta", "index": 0, "delta": {"type": "text_delta", "text": "world"}})},
+            {"event": "content_block_stop", "data": json.dumps({"type": "content_block_stop", "index": 0})},
+            {"event": "content_block_start", "data": json.dumps({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "t1", "name": "ls", "input": {}}})},
+            {"event": "content_block_stop", "data": json.dumps({"type": "content_block_stop", "index": 1})},
+            {"event": "message_delta", "data": json.dumps({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"input_tokens": 10, "output_tokens": 5}})},
+            {"event": "message_stop", "data": json.dumps({"type": "message_stop"})},
+        ]
+        out = translate_anthropic_stream(events, self._cfg(), call_backend=self.fake())
+        texts = [json.loads(e["data"])["delta"]["text"] for e in out if e["event"] == "text_delta"]
+        self.assertEqual(texts, ["…", "Przetlumaczone."])
+        self.assertIn("tool_use", out[4]["data"])
+        usage = [json.loads(e["data"]) for e in out if e["event"] == "message_delta"][0]
+        self.assertEqual(usage["usage"]["output_tokens"], 5)
+
+    def test_anthropic_stream_no_text_only_tools(self):
+        events = [
+            {"event": "content_block_start", "data": json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "t", "name": "bash", "input": {}}})},
+            {"event": "content_block_stop", "data": json.dumps({"type": "content_block_stop", "index": 0})},
+        ]
+        out = translate_anthropic_stream(events, self._cfg(), call_backend=self.never())
+        self.assertEqual([e for e in out if e["event"] == "text_delta"], [])
+
+    def test_anthropic_nonstream(self):
+        body = {"content": [{"type": "text", "text": "Hello world."},
+                            {"type": "tool_use", "id": "t", "name": "ls", "input": {}}]}
+        out = translate_anthropic_nonstream(body, self._cfg(), call_backend=self.fake())
+        self.assertEqual(out["content"][0]["text"], "Przetlumaczone.")
+        self.assertEqual(out["content"][1]["name"], "ls")
+
+    def test_openai_stream(self):
+        chunks = [
+            {"id": "a", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]},
+            {"id": "a", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "Hi "}}]},
+            {"id": "a", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "there"}}]},
+            {"id": "a", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+        out = translate_openai_stream(chunks, self._cfg(), call_backend=self.fake())
+        contents = [c["choices"][0]["delta"].get("content") for c in out]
+        self.assertEqual(contents, ["", "…", "Przetlumaczone.", None])
+        self.assertTrue(any(c["choices"][0].get("finish_reason") == "stop" for c in out))
+
+    def test_openai_nonstream(self):
+        body = {"choices": [{"message": {"role": "assistant", "content": "Hello world.",
+                                         "tool_calls": [{"function": {"name": "x"}}]}}]}
+        out = translate_openai_nonstream(body, self._cfg(), call_backend=self.fake())
+        self.assertEqual(out["choices"][0]["message"]["content"], "Przetlumaczone.")
+        self.assertEqual(out["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "x")
+
+    def test_sse_roundtrip(self):
+        raw = b'event: message_delta\ndata: {"x": 1}\n\n'
+        events = parse_sse(raw)
+        self.assertEqual(events[0]["event"], "message_delta")
+        self.assertEqual(encode_sse(events), raw)
+
+    def test_egress_translator_failure_returns_english(self):
+        def fake(backend, model, prompt, text, cfg):
+            raise TranslatorError("boom")
+        body = {"content": [{"type": "text", "text": "Keep this English."}]}
+        out = translate_anthropic_nonstream(body, self._cfg(), call_backend=fake)
+        self.assertEqual(out["content"][0]["text"], "Keep this English.")
