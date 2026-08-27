@@ -161,3 +161,19 @@ def restore(text: str, spans):
     for i, span in enumerate(spans):
         text = text.replace(f"{_MARK}{i}{_MARK_END}", span)
     return text
+
+
+STOPWORDS_EN = frozenset("""a an and are as at be but by did do does for from had has have he her his
+i if in is it its me my not of on or our she so that the their them then there these they this to
+was we were what when where which who will with you your""".split())
+
+
+def guard_skip(text: str, cfg: Config) -> bool:
+    """True when text already looks like MODEL_LANG (English stopword ratio high)."""
+    if cfg.model_lang != "en":
+        return False
+    words = re.findall(r"[a-zA-Z]+", text.lower())
+    if not words:
+        return False
+    hits = sum(1 for w in words if w in STOPWORDS_EN)
+    return (hits / len(words)) >= cfg.guard_ratio

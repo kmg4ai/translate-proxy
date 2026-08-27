@@ -88,3 +88,33 @@ class ProtectTests(unittest.TestCase):
         p, spans = protect("a `x` b")
         out = restore("nie ma tu markera", spans)
         self.assertEqual(out, "nie ma tu markera")
+from translate_proxy import Config, guard_skip
+
+
+class GuardTests(unittest.TestCase):
+    def _cfg(self, ratio=0.3, model_lang="en"):
+        return Config(port=8800, upstream="u", verbose=False, placeholder="…",
+                      user_lang="pl", user_lang_name="Polish",
+                      model_lang=model_lang, model_lang_name="English",
+                      translator="openrouter", translator_model="m", translator_fallback=[],
+                      translate_history=True, cache_size=10, guard_ratio=ratio,
+                      translator_timeout=60, upstream_timeout=300, cerebras_base="c")
+
+    def test_english_skipped(self):
+        self.assertTrue(guard_skip(
+            "Please show me the list of files in this directory and tell me what they are.",
+            self._cfg()))
+
+    def test_polish_not_skipped(self):
+        self.assertFalse(guard_skip(
+            "Pokaz mi liste plikow w tym katalogu i powiedz co one robia.",
+            self._cfg()))
+
+    def test_polish_without_diacritics_not_skipped(self):
+        self.assertFalse(guard_skip("czy mozesz sprawdzic ten plik i dac mi raport", self._cfg()))
+
+    def test_empty_not_skipped(self):
+        self.assertFalse(guard_skip("   ", self._cfg()))
+
+    def test_non_en_model_lang_never_skips(self):
+        self.assertFalse(guard_skip("This is clearly English text.", self._cfg(model_lang="de")))
