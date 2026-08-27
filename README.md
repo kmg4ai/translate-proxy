@@ -22,8 +22,8 @@ back in *your* language. The English in between is invisible — and nearly free
 - 🧠 The model only ever sees and produces **English** — its strongest language. Better
   reasoning, and you never waste tokens on "sorry, could you say that in English?".
 - 💸 **Save tokens** — say it once, in your language, done.
-- 📉 **Save 40%.** 📈 **Save 140%.** (Math says you can't save more than 100%, but our
-  heart says otherwise.)
+- 📉 **Save ~10–20%** on mid-range and premium models (measured). 📈 **Save 140%.**
+  (Math says you can't save more than 100%, but our heart says otherwise.)
 - 🤖 Works with Claude Code, opencode, Hermes — anything that speaks the Anthropic or
   OpenAI wire formats.
 
