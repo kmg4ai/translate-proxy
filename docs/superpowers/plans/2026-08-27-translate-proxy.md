@@ -16,7 +16,7 @@ Copy these verbatim into every review; they are binding:
 - **Bind `127.0.0.1` only** — never `0.0.0.0`.
 - **Config defaults** (from spec): `USER_LANG=pl`, `USER_LANG_NAME=Polish`, `MODEL_LANG=en`, `MODEL_LANG_NAME=English`, `TRANSLATOR=openrouter`, `TRANSLATOR_MODEL=google/gemini-2.5-flash`, `TRANSLATOR_FALLBACK=deepseek/deepseek-v4-flash`, `TRANSLATE_HISTORY=true`, `CACHE_SIZE=500`, `GUARD_STOPWORD_RATIO=0.3`, `PLACEHOLDER=…`, default port `8800`.
 - **Never translate:** system prompt, `tool_use` blocks, `tool_result` blocks, `thinking` blocks, content inside fenced code blocks, inline code, URLs, and text already in `MODEL_LANG`.
-- **Guard:** when `MODEL_LANG=en`, input text whose English stopword ratio ≥ `GUARD_STOPWORD_RATIO` is passed through untranslated.
+- **Guard:** when `MODEL_LANG=en`, input text with **≥ 2** English stopword hits AND stopword ratio ≥ `GUARD_STOPWORD_RATIO` (0.3) is passed through untranslated (min-2-hits floor: short Polish phrases with "to"/"i" are not skipped; adjudicated 2026-08-27).
 - **Fallback semantics:** try primary translator, then each `TRANSLATOR_FALLBACK` entry; only when the **entire chain fails**: egress returns the original English text, ingress forwards the untranslated prompt.
 - **Both wire formats, both stream modes** must be handled.
 - **Offline tests:** stdlib `unittest`, translator mocked via injected callable; only loopback (`127.0.0.1`) HTTP test servers allowed, never external network.
@@ -445,7 +445,9 @@ def guard_skip(text: str, cfg: Config) -> bool:
     if not words:
         return False
     hits = sum(1 for w in words if w in STOPWORDS_EN)
-    return (hits / len(words)) >= cfg.guard_ratio
+    # Min. 2 hits: short Polish phrases ("zrob to", "co to jest") contain "to"
+    # (an English stopword) and at ratio-only would be skipped as "already English".
+    return hits >= 2 and (hits / len(words)) >= cfg.guard_ratio
 ```
 
 - [ ] **Step 4: Run test to verify it passes**

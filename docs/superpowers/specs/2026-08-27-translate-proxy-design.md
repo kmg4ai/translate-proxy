@@ -143,9 +143,13 @@ Built-in language-name map for common codes (`pl`, `en`, `de`, `fr`, `es`, `it`,
 
 ### Minimal guard (not full detection)
 
-- If a text part already appears to be in `MODEL_LANG` (English stopword count high,
-  e.g. ≥50% of stopword hits are English), skip input translation — avoids double-translating
-  English input pasted into a Polish prompt.
+- If a text part already appears to be in `MODEL_LANG` (English stopword count high),
+  skip input translation — avoids double-translating English input pasted into a Polish
+  prompt. Implemented predicate (adjudicated 2026-08-27): when `MODEL_LANG=en`, skip only
+  when at least **2** English stopword hits AND the stopword ratio ≥ `GUARD_STOPWORD_RATIO`
+  (default 0.3). The min-2-hits floor keeps short Polish phrases such as "zrob to" /
+  "co to jest" (whose "to"/"i" are English stopwords) from being skipped; pasted English
+  blocks produce many hits and are still detected.
 - Text inside fenced code blocks and inline code is never translated.
 
 ## What is NEVER translated
