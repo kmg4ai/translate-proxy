@@ -435,7 +435,10 @@ def translate_anthropic_stream(events, cfg, call_backend=None):
             if cfg.placeholder:
                 d = {"type": "text_delta", "index": buffer["index"], "delta": {"type": "text_delta", "text": cfg.placeholder}}
                 out.append(_ev("text_delta", d))
-        elif etype == "text_delta" and buffer and data and data.get("index") == buffer["index"]:
+        elif buffer and data and data.get("index") == buffer["index"] and (
+            etype == "text_delta"
+            or (etype == "content_block_delta" and data.get("delta", {}).get("type") == "text_delta")
+        ):
             buffer["text"] += data.get("delta", {}).get("text", "")
         elif etype == "content_block_stop" and buffer and data and data.get("index") == buffer["index"]:
             translated = translate_text(buffer["text"], cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend)

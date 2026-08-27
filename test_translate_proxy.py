@@ -434,6 +434,31 @@ class EgressTests(unittest.TestCase):
         usage = [json.loads(e["data"]) for e in out if e["event"] == "message_delta"][0]
         self.assertEqual(usage["usage"]["output_tokens"], 5)
 
+    def test_anthropic_stream_content_block_delta_text(self):
+        # deepseek-proxy-style upstream emits text as event: content_block_delta
+        # with delta.type == "text_delta" (not event: text_delta). It must be
+        # buffered and translated, never passed through in the model's language;
+        # thinking_delta (same envelope, different delta.type) passes through.
+        events = [
+            {"event": "content_block_start", "data": json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})},
+            {"event": "content_block_delta", "data": json.dumps({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Hmm"}})},
+            {"event": "content_block_stop", "data": json.dumps({"type": "content_block_stop", "index": 0})},
+            {"event": "content_block_start", "data": json.dumps({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}})},
+            {"event": "content_block_delta", "data": json.dumps({"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Hello "}})},
+            {"event": "content_block_delta", "data": json.dumps({"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "world"}})},
+            {"event": "content_block_stop", "data": json.dumps({"type": "content_block_stop", "index": 1})},
+            {"event": "message_delta", "data": json.dumps({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"input_tokens": 10, "output_tokens": 5}})},
+            {"event": "message_stop", "data": json.dumps({"type": "message_stop"})},
+        ]
+        out = translate_anthropic_stream(events, self._cfg(), call_backend=self.fake())
+        texts = [json.loads(e["data"])["delta"]["text"] for e in out if e["event"] == "text_delta"]
+        self.assertEqual(texts, ["…", "Przetlumaczone."])
+        # raw English content_block_delta must not reach the client
+        self.assertFalse(any(e["event"] == "content_block_delta" and json.loads(e["data"])["delta"].get("type") == "text_delta" for e in out))
+        # thinking delta passes through untouched
+        thinking = [json.loads(e["data"])["delta"]["thinking"] for e in out if e["event"] == "content_block_delta"]
+        self.assertEqual(thinking, ["Hmm"])
+
     def test_anthropic_stream_no_text_only_tools(self):
         events = [
             {"event": "content_block_start", "data": json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "t", "name": "bash", "input": {}}})},
