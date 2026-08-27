@@ -13,6 +13,56 @@ already uses:
 
 Python standard library only. Works for **any language pair** (`USER_LANG`/`MODEL_LANG`).
 
+## ✨ You need this
+
+*You* write in *your* language. The model *always* thinks in English. The answer comes
+back in *your* language. The English in between is invisible — and nearly free.
+
+- 🗣️ Ask in Polish, German, Japanese, Arabic, Hindi, Swahili… ~100 languages, zero setup.
+- 🧠 The model only ever sees and produces **English** — its strongest language. Better
+  reasoning, and you never waste tokens on "sorry, could you say that in English?".
+- 💸 **Save tokens** — say it once, in your language, done.
+- 📉 **Save 40%.** 📈 **Save 140%.** (Math says you can't save more than 100%, but our
+  heart says otherwise.)
+- 🤖 Works with Claude Code, opencode, Hermes — anything that speaks the Anthropic or
+  OpenAI wire formats.
+
+### How the magic happens
+
+```text
+you (PL):       "Czesc, jak sie masz?"
+   └─ proxy ──► model (EN): "Hi, how are you?"
+   └─ model ──► proxy:      "I'm doing well, thank you!"
+   └─ proxy ──► you (PL):   "U mnie wszystko dobrze, dziękuję!"
+```
+
+Your prompt is translated to English **once** (going in), and the model's answer is
+translated back **once** (coming out). That's the whole cost.
+
+### 💰 What you actually pay
+
+The main model costs what your provider charges. **The only *extra* cost is the cheap
+translation model** — one OpenRouter-style call per translation. One exchange =
+2 translations (in + out).
+
+Model prices (OpenRouter, per million tokens):
+
+| Model | Input | Output |
+|---|---|---|
+| `google/gemini-2.5-flash` (default) | $0.30 | $2.50 |
+| `deepseek/deepseek-v4-flash` (fallback) | $0.08 | $0.16 |
+
+Cost per **single translation** (one direction):
+
+| Text size | Example | gemini-2.5-flash (default) | deepseek-v4-flash (fallback) |
+|---|---|---|---|
+| Tiny (~20 tokens) | "How are you?" | ~$0.00008 | ~$0.00001 |
+| Typical (~200 tokens) | a question about your code | ~$0.0006 | ~$0.00005 |
+| Long (~800 tokens) | explain this whole file | ~$0.0023 | ~$0.0002 |
+
+A busy coding session (30 exchanges, each a few hundred tokens) costs **a few cents of
+translation in total**. Next to the main model's bill, that's rounding error.
+
 ## Quickstart
 
 ```bash
