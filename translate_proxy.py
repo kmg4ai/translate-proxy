@@ -143,14 +143,20 @@ _MARK_END = "⟧"
 
 
 def protect(text: str):
-    """Extract fenced code blocks, inline code and URLs into ⟦N⟧ placeholders."""
+    """Extract fenced code blocks, inline code and URLs into ⟦N⟧ placeholders.
+
+    Literal ⟦N⟧ marker-looking sequences already present in the input are wrapped as
+    spans that map back to themselves, so a later restore() is idempotent and can never
+    substitute a real code/URL span into them.
+    """
     spans = []
 
     def repl(m):
         spans.append(m.group(0).rstrip(".,;:!?"))
         return f"{_MARK}{len(spans) - 1}{_MARK_END}"
 
-    t = re.sub(r"```[\s\S]*?```", repl, text)
+    t = re.sub(rf"{_MARK}\d+{_MARK_END}", repl, text)
+    t = re.sub(r"```[\s\S]*?```", repl, t)
     t = re.sub(r"`[^`\n]+`", repl, t)
     t = re.sub(r"https?://\S+(?<![.,;:!?])", repl, t)
     return t, spans
@@ -199,6 +205,8 @@ def _cache_get(key):
 
 
 def _cache_put(key, value, cap):
+    if cap <= 0:
+        return  # cache disabled (mirrors functools.lru_cache(maxsize=0))
     with _cache_lock:
         if key not in _cache and len(_cache) >= cap:
             _cache.pop(next(iter(_cache)))  # FIFO eviction of the oldest entry
@@ -288,18 +296,18 @@ def translate_text(text, cfg, src, dst, direction="ingress", call_backend=None):
     return restore(out, spans)
 
 
-def _translate_content(content, cfg, call_backend):
-    """Translate the text parts of a message's content (str or list of blocks).
+def _translate_content(content, cfg, call_backend, src, dst, direction):
+    """Translate the text parts of a content value (str or list of blocks).
 
     Non-text blocks (tool_use, tool_result, thinking, image_url, tool_calls)
     pass through untouched.
     """
     if isinstance(content, str):
-        return translate_text(content, cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
+        return translate_text(content, cfg, src, dst, direction, call_backend)
     if isinstance(content, list):
         for blk in content:
             if isinstance(blk, dict) and blk.get("type") == "text":
-                blk["text"] = translate_text(blk.get("text", ""), cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
+                blk["text"] = translate_text(blk.get("text", ""), cfg, src, dst, direction, call_backend)
         return content
     return content
 
@@ -313,7 +321,8 @@ def translate_anthropic_messages(body, cfg, call_backend=None):
             continue
         if role == "assistant" and not cfg.translate_history:
             continue
-        msg["content"] = _translate_content(msg.get("content"), cfg, call_backend)
+        msg["content"] = _translate_content(msg.get("content"), cfg, call_backend,
+                                            cfg.user_lang, cfg.model_lang, "ingress")
     return body
 
 
@@ -325,7 +334,8 @@ def translate_openai_messages(body, cfg, call_backend=None):
             continue
         if role == "assistant" and not cfg.translate_history:
             continue
-        msg["content"] = _translate_content(msg.get("content"), cfg, call_backend)
+        msg["content"] = _translate_content(msg.get("content"), cfg, call_backend,
+                                            cfg.user_lang, cfg.model_lang, "ingress")
     return body
 
 
@@ -468,17 +478,19 @@ def translate_openai_stream(chunks, cfg, call_backend=None):
 
 
 def translate_anthropic_nonstream(body, cfg, call_backend=None):
-    for blk in body.get("content", []):
-        if isinstance(blk, dict) and blk.get("type") == "text":
-            blk["text"] = translate_text(blk.get("text", ""), cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend)
+    content = body.get("content")
+    if content is not None:
+        body["content"] = _translate_content(content, cfg, call_backend,
+                                             cfg.model_lang, cfg.user_lang, "egress")
     return body
 
 
 def translate_openai_nonstream(body, cfg, call_backend=None):
     for choice in body.get("choices", []):
         msg = choice.get("message")
-        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-            msg["content"] = translate_text(msg["content"], cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend)
+        if isinstance(msg, dict):
+            msg["content"] = _translate_content(msg.get("content"), cfg, call_backend,
+                                                cfg.model_lang, cfg.user_lang, "egress")
     return body
 
 class Handler(BaseHTTPRequestHandler):
@@ -510,10 +522,10 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length)
         cb = type(self).call_backend  # plain fn, not bound method
         try:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length)
             if self.path == "/v1/messages":
                 body = json.loads(raw.decode("utf-8"))
                 body = translate_anthropic_messages(body, self.cfg, call_backend=cb)
@@ -525,7 +537,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json(404, {"error": "unknown path: " + self.path})
         except (ValueError, json.JSONDecodeError) as e:
-            self._json(400, {"error": "bad json: " + str(e)})
+            self._json(400, {"error": "bad request: " + str(e)})
 
     def _forward(self, path, body, stream, cb):
         url = self.cfg.upstream.rstrip("/") + path
@@ -540,16 +552,21 @@ class Handler(BaseHTTPRequestHandler):
                 headers[h] = v
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
-            resp = urllib.request.urlopen(req, timeout=self.cfg.upstream_timeout)
+            with urllib.request.urlopen(req, timeout=self.cfg.upstream_timeout) as resp:
+                raw = resp.read()
+                ctype = resp.headers.get("Content-Type") or ""
+                status = resp.status
         except urllib.error.HTTPError as e:
-            self._send(e.code, {"Content-Type": e.headers.get("Content-Type") or "application/json"}, e.read())
+            try:
+                err_body = e.read()
+            finally:
+                e.close()
+            self._send(e.code, {"Content-Type": e.headers.get("Content-Type") or "application/json"}, err_body)
             return
         except Exception as e:
-            self._json(502, {"error": "upstream unreachable: " + str(e)})
+            print(f"[translate-proxy] upstream unreachable: {e}", file=sys.stderr)
+            self._json(502, {"error": "upstream unreachable"})
             return
-        raw = resp.read()
-        ctype = resp.headers.get("Content-Type") or ""
-        status = resp.status
         if stream and "text/event-stream" in ctype:
             events = parse_sse(raw)
             if self.path == "/v1/messages":
@@ -574,6 +591,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def _serve(server, stop_file):
     print(f"[translate-proxy] listening on http://127.0.0.1:{server.server_port}", file=sys.stderr)
+    # A previous --stop may have left a stale stop file behind; clear it so a fresh
+    # start on the same port actually serves instead of exiting 0 immediately.
+    try:
+        os.remove(stop_file)
+    except FileNotFoundError:
+        pass
     server.timeout = 0.5
     try:
         while not os.path.exists(stop_file):
@@ -596,6 +619,10 @@ def main(argv=None):
         except Exception as e:
             print(f"health check failed: {e}", file=sys.stderr)
             return 1
+    key_env = BACKENDS[cfg.translator][2] if cfg.translator in BACKENDS else None
+    if key_env and not os.environ.get(key_env):
+        print(f"[translate-proxy] warning: {key_env} is not set — {cfg.translator} translation "
+              "will fall back to the next backend or pass through untranslated", file=sys.stderr)
     Handler.cfg = cfg
     server = ThreadingHTTPServer(("127.0.0.1", cfg.port), Handler)
     _serve(server, cfg.stop_file)
