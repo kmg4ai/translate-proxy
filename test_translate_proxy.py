@@ -375,3 +375,169 @@ class EgressTests(unittest.TestCase):
         tool_deltas = [c["choices"][0]["delta"].get("tool_calls") for c in out]
         self.assertTrue(any(td is not None for td in tool_deltas))
         self.assertTrue(any(c["choices"][0].get("finish_reason") == "tool_calls" for c in out))
+import json
+import threading
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from translate_proxy import Handler
+
+
+class HttpTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # -- mock upstream -------------------------------------------------
+        class Up(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                data = b'{"up": true}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                path = self.path
+                if path == "/v1/messages" and body.get("stream"):
+                    resp = (
+                        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+                        'event: text_delta\ndata: {"type":"text_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n'
+                        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n'
+                        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":5,"output_tokens":1}}\n\n'
+                        'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp.encode("utf-8"))
+                elif path == "/v1/messages":
+                    resp = {"content": [{"type": "text", "text": "Hello non-stream."},
+                                        {"type": "tool_use", "id": "t1", "name": "ls", "input": {}}],
+                            "stop_reason": "end_turn", "usage": {"input_tokens": 5, "output_tokens": 2}}
+                    data = json.dumps(resp).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                elif path == "/v1/chat/completions":
+                    resp = {"choices": [{"message": {"role": "assistant", "content": "Hello openai."}}],
+                            "usage": {"total_tokens": 3}}
+                    data = json.dumps(resp).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+        cls.up = ThreadingHTTPServer(("127.0.0.1", 0), Up)
+        t = threading.Thread(target=cls.up.serve_forever, daemon=True)
+        t.start()
+
+        # -- proxy under test ----------------------------------------------
+        cls.cfg = Config(port=0, upstream=f"http://127.0.0.1:{cls.up.server_address[1]}",
+                         verbose=False, placeholder="…",
+                         user_lang="pl", user_lang_name="Polish",
+                         model_lang="en", model_lang_name="English",
+                         translator="openrouter", translator_model="m", translator_fallback=[],
+                         translate_history=True, cache_size=5, guard_ratio=0.3,
+                         translator_timeout=60, upstream_timeout=300, cerebras_base="c")
+
+        def echo_backend(backend, model, prompt, text, cfg):
+            return text  # echo: offline, deterministic
+
+        class Proxy(Handler):
+            pass
+
+        Proxy.cfg = cls.cfg
+        Proxy.call_backend = echo_backend
+        cls.proxy = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+        t2 = threading.Thread(target=cls.proxy.serve_forever, daemon=True)
+        t2.start()
+
+        # bad-upstream proxy (for the 502 test)
+        class BadProxy(Handler):
+            pass
+
+        BadCfg = Config(port=0, upstream="http://127.0.0.1:1", verbose=False, placeholder="…",
+                        user_lang="pl", user_lang_name="Polish",
+                        model_lang="en", model_lang_name="English",
+                        translator="openrouter", translator_model="m", translator_fallback=[],
+                        translate_history=True, cache_size=5, guard_ratio=0.3,
+                        translator_timeout=60, upstream_timeout=2, cerebras_base="c")
+        BadProxy.cfg = BadCfg
+        BadProxy.call_backend = echo_backend
+        cls.bad = ThreadingHTTPServer(("127.0.0.1", 0), BadProxy)
+        t3 = threading.Thread(target=cls.bad.serve_forever, daemon=True)
+        t3.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proxy.shutdown()
+        cls.bad.shutdown()
+        cls.up.shutdown()
+        cls.proxy.server_close()
+        cls.bad.server_close()
+        cls.up.server_close()
+
+    def _post(self, server, path, body):
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}{path}", data=data,
+                                     headers={"Content-Type": "application/json",
+                                              "Anthropic-Version": "2023-06-01"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.read().decode("utf-8"), r.headers.get("Content-Type")
+        except urllib.request.HTTPError as e:  # 4xx/5xx: urlopen raises; surface status+body
+            code, body, ctype = e.code, e.read().decode("utf-8"), e.headers.get("Content-Type")
+            e.close()
+            return code, body, ctype
+
+    def test_health(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.proxy.server_address[1]}/health") as r:
+            self.assertEqual(json.loads(r.read().decode("utf-8")), {"ok": True})
+
+    def test_unknown_path_404(self):
+        status, body, _ = self._post(self.proxy, "/v1/nope", {"a": 1})
+        self.assertEqual(status, 404)
+
+    def test_anthropic_stream_translated(self):
+        status, body, ctype = self._post(self.proxy, "/v1/messages",
+                                         {"model": "m", "stream": True,
+                                          "messages": [{"role": "user", "content": "Czesc"}]})
+        self.assertEqual(status, 200)
+        self.assertIn("text/event-stream", ctype)
+        self.assertIn("Hello", body)   # echoed translated egress text
+        self.assertIn("…", body)       # placeholder
+        self.assertIn("message_stop", body)
+
+    def test_anthropic_nonstream_translated(self):
+        status, body, _ = self._post(self.proxy, "/v1/messages",
+                                     {"model": "m", "stream": False,
+                                      "messages": [{"role": "user", "content": "Czesc"}]})
+        self.assertEqual(status, 200)
+        out = json.loads(body)
+        self.assertEqual(out["content"][0]["text"], "Hello non-stream.")
+        self.assertEqual(out["content"][1]["name"], "ls")
+
+    def test_openai_nonstream_translated(self):
+        status, body, _ = self._post(self.proxy, "/v1/chat/completions",
+                                     {"model": "m", "messages": [{"role": "user", "content": "Czesc"}]})
+        self.assertEqual(status, 200)
+        self.assertIn("Hello openai.", body)
+
+    def test_upstream_down_502(self):
+        status, body, _ = self._post(self.bad, "/v1/messages",
+                                     {"model": "m", "messages": [{"role": "user", "content": "x"}]})
+        self.assertEqual(status, 502)
+        self.assertIn("upstream unreachable", body)

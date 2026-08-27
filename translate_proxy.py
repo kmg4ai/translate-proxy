@@ -480,3 +480,127 @@ def translate_openai_nonstream(body, cfg, call_backend=None):
         if isinstance(msg, dict) and isinstance(msg.get("content"), str):
             msg["content"] = translate_text(msg["content"], cfg, cfg.model_lang, cfg.user_lang, "egress", call_backend)
     return body
+
+class Handler(BaseHTTPRequestHandler):
+    cfg = None
+    call_backend = None  # test injection seam: translator callable (backend, model, prompt, text, cfg) -> str
+    server_version = "translate-proxy/" + VERSION
+
+    def log_message(self, fmt, *args):
+        if self.cfg and self.cfg.verbose:
+            super().log_message(fmt, *args)
+
+    def _send(self, status, headers, body):
+        self.send_response(status)
+        for k, v in headers.items():
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+    def _json(self, status, obj):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self._send(status, {"Content-Type": "application/json; charset=utf-8"}, body)
+
+    def do_GET(self):
+        if self.path == "/health":
+            self._json(200, {"ok": True})
+            return
+        self._json(404, {"error": "not found"})
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length)
+        cb = type(self).call_backend  # plain fn, not bound method
+        try:
+            if self.path == "/v1/messages":
+                body = json.loads(raw.decode("utf-8"))
+                body = translate_anthropic_messages(body, self.cfg, call_backend=cb)
+                self._forward(self.path, body, bool(body.get("stream")), cb)
+            elif self.path == "/v1/chat/completions":
+                body = json.loads(raw.decode("utf-8"))
+                body = translate_openai_messages(body, self.cfg, call_backend=cb)
+                self._forward(self.path, body, bool(body.get("stream")), cb)
+            else:
+                self._json(404, {"error": "unknown path: " + self.path})
+        except (ValueError, json.JSONDecodeError) as e:
+            self._json(400, {"error": "bad json: " + str(e)})
+
+    def _forward(self, path, body, stream, cb):
+        url = self.cfg.upstream.rstrip("/") + path
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": self.headers.get("Accept") or "*/*",
+        }
+        for h in ("Authorization", "X-Api-Key", "Anthropic-Version", "Anthropic-Beta"):
+            v = self.headers.get(h)
+            if v:
+                headers[h] = v
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            resp = urllib.request.urlopen(req, timeout=self.cfg.upstream_timeout)
+        except urllib.error.HTTPError as e:
+            self._send(e.code, {"Content-Type": e.headers.get("Content-Type") or "application/json"}, e.read())
+            return
+        except Exception as e:
+            self._json(502, {"error": "upstream unreachable: " + str(e)})
+            return
+        raw = resp.read()
+        ctype = resp.headers.get("Content-Type") or ""
+        status = resp.status
+        if stream and "text/event-stream" in ctype:
+            events = parse_sse(raw)
+            if self.path == "/v1/messages":
+                events = translate_anthropic_stream(events, self.cfg, call_backend=cb)
+                self._send(status, {"Content-Type": "text/event-stream; charset=utf-8"}, encode_sse(events))
+            else:
+                done = any(e.get("data") == "[DONE]" for e in events)
+                parsed = [json.loads(e["data"]) for e in events if e.get("data") and e["data"] != "[DONE]"]
+                translated = translate_openai_stream(parsed, self.cfg, call_backend=cb)
+                out_events = [{"event": None, "data": json.dumps(c, ensure_ascii=False)} for c in translated]
+                if done:
+                    out_events.append({"event": None, "data": "[DONE]"})
+                self._send(status, {"Content-Type": "text/event-stream; charset=utf-8"}, encode_sse(out_events))
+        else:
+            if self.path == "/v1/messages":
+                out = translate_anthropic_nonstream(json.loads(raw.decode("utf-8")), self.cfg, call_backend=cb)
+            else:
+                out = translate_openai_nonstream(json.loads(raw.decode("utf-8")), self.cfg, call_backend=cb)
+            self._send(status, {"Content-Type": ctype or "application/json; charset=utf-8"},
+                       json.dumps(out, ensure_ascii=False).encode("utf-8"))
+
+
+def _serve(server, stop_file):
+    print(f"[translate-proxy] listening on http://127.0.0.1:{server.server_port}", file=sys.stderr)
+    server.timeout = 0.5
+    try:
+        while not os.path.exists(stop_file):
+            server.handle_request()
+    finally:
+        server.server_close()
+
+
+def main(argv=None):
+    cfg = load_config(argv)
+    if cfg.stop_requested:
+        open(cfg.stop_file, "w").close()
+        print(f"[translate-proxy] stop requested (wrote {cfg.stop_file})")
+        return 0
+    if cfg.health_only:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{cfg.port}/health", timeout=5) as r:
+                print(r.read().decode("utf-8"))
+                return 0 if r.status == 200 else 1
+        except Exception as e:
+            print(f"health check failed: {e}", file=sys.stderr)
+            return 1
+    Handler.cfg = cfg
+    server = ThreadingHTTPServer(("127.0.0.1", cfg.port), Handler)
+    _serve(server, cfg.stop_file)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
