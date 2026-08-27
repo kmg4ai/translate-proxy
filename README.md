@@ -105,6 +105,31 @@ billing **English instead of your (longer) language**. Same shape on mid-tier ma
 for Chinese — it bills Chinese *under* English (0.92×) — so Chinese pays the least for
 translation and still saves on the main model.
 
+#### Where the money goes — the two translation legs vs the saving
+
+Same scenario, DeepSeek translator only (Google Translate / DeepL / Azure bill the same
+way, at their own rates). "→ EN" = your question being translated in; "EN → you" = the
+answer being translated back. The main model always bills **English** — a fixed $0.0206
+for every language; the only per-language line is the translation:
+
+| Your language | translate question → EN | translate answer EN → you | translation total | **with proxy** (main + translation) | without proxy | you save |
+|---|---|---|---|---|---|---|
+| Polish | $0.00004 | $0.00009 | $0.00012 | $0.0207 | $0.038 | **~45%** |
+| German | $0.00003 | $0.00008 | $0.00012 | $0.0207 | $0.034 | ~39% |
+| Japanese | $0.00003 | $0.00008 | $0.00011 | $0.0207 | $0.047 | ~56% |
+| Arabic | $0.00003 | $0.00008 | $0.00012 | $0.0207 | $0.058 | **~64%** |
+| Chinese | $0.00003 | $0.00006 | $0.00008 | $0.0206 | $0.032 | ~36% |
+
+Read it top to bottom: the **translation is 0.4–0.6% of the exchange** — a ~$0.0001
+rounding error — while the main-model saving is **36–64%**. The answer leg costs ~2×
+the question leg (the answer is longer, and DeepSeek bills output at double the input
+rate). So on mid and premium mains it *always* pays: you pay a half-percent tax on a
+thirty-to-sixty-percent discount.
+
+The one case where it does **not** pay is `deepseek-v4-flash` / `deepseek-pro` as the
+*main* model — the proxy skips translation entirely (see above), because translating
+an exchange that cheap would cost ~1.5× the exchange itself.
+
 What this means:
 
 - **Cheap main model** (like `deepseek-v4-flash` itself): passed through untranslated,
