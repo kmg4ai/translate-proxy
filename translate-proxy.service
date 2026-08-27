@@ -1,0 +1,18 @@
+[Unit]
+Description=translate-proxy — transparent translation relay for LLM coding agents
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/translate-proxy.env
+# Example: Claude Code -> translate-proxy :8800 -> existing deepseek proxy :8799
+ExecStart=/usr/bin/python3 /opt/translate-proxy/translate_proxy.py --port 8800 --upstream http://127.0.0.1:8799
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target
