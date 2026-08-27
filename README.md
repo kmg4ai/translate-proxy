@@ -49,19 +49,19 @@ Model prices (OpenRouter, per million tokens):
 
 | Model | Input | Output |
 |---|---|---|
-| `google/gemini-2.5-flash` (default) | $0.30 | $2.50 |
-| `deepseek/deepseek-v4-flash` (fallback) | $0.08 | $0.16 |
+| `deepseek/deepseek-v4-flash` (default) | $0.08 | $0.16 |
+| `google/gemini-2.5-flash` (fallback) | $0.30 | $2.50 |
 
 Cost per **single translation** (one direction):
 
-| Text size | Example | gemini-2.5-flash (default) | deepseek-v4-flash (fallback) |
+| Text size | Example | deepseek-v4-flash (default) | gemini-2.5-flash (fallback) |
 |---|---|---|---|
-| Tiny (~20 tokens) | "How are you?" | ~$0.00008 | ~$0.00001 |
-| Typical (~200 tokens) | a question about your code | ~$0.0006 | ~$0.00005 |
-| Long (~800 tokens) | explain this whole file | ~$0.0023 | ~$0.0002 |
+| Tiny (~20 tokens) | "How are you?" | ~$0.000005 | ~$0.00008 |
+| Typical (~200 tokens) | a question about your code | ~$0.00005 | ~$0.0006 |
+| Long (~800 tokens) | explain this whole file | ~$0.0002 | ~$0.0023 |
 
-A busy coding session (30 exchanges, each a few hundred tokens) costs **a few cents of
-translation in total**. Next to the main model's bill, that's rounding error.
+A busy coding session (30 exchanges, each a few hundred tokens) costs **a fraction of a
+cent of translation in total**. Next to the main model's bill, that's rounding error.
 
 ## Quickstart
 
@@ -88,8 +88,8 @@ All config is via environment variables (see `.env.example`).
 | `USER_LANG` | `pl` | language you write in |
 | `MODEL_LANG` | `en` | language the main model should use |
 | `TRANSLATOR` | `openrouter` | primary translator backend (`openrouter` \| `deepseek` \| `cerebras`) |
-| `TRANSLATOR_MODEL` | `google/gemini-2.5-flash` | model for the primary backend |
-| `TRANSLATOR_FALLBACK` | `deepseek/deepseek-v4-flash` | comma-separated `backend/model` fallback chain |
+| `TRANSLATOR_MODEL` | `deepseek/deepseek-v4-flash` | model for the primary backend |
+| `TRANSLATOR_FALLBACK` | `openrouter/google/gemini-2.5-flash` | comma-separated `backend/model` fallback chain |
 | `TRANSLATE_HISTORY` | `true` | translate history prose to `MODEL_LANG` on ingress |
 | `CACHE_SIZE` | `500` | in-memory translation cache bound |
 | `GUARD_STOPWORD_RATIO` | `0.3` | above this English-stopword ratio input is passed through untranslated |

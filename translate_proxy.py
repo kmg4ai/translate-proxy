@@ -64,7 +64,7 @@ def parse_bool(v, default: bool = False) -> bool:
 
 BACKENDS = {
     # name -> (default OpenAI chat/completions URL, default model, key env var or None)
-    "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "google/gemini-2.5-flash", "OPENROUTER_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-v4-flash", "OPENROUTER_API_KEY"),
     "deepseek": ("https://api.deepseek.com/chat/completions", "deepseek-v4-flash", "DEEPSEEK_API_KEY"),
     "cerebras": (None, "gpt-oss-120b", None),  # URL comes from CEREBRAS_BASE (+ /chat/completions)
 }
@@ -133,7 +133,7 @@ def load_config(argv=None) -> Config:
     model_lang = os.environ.get("MODEL_LANG", "en").strip().lower()
     translator = os.environ.get("TRANSLATOR", "openrouter").strip().lower()
     translator_model = os.environ.get("TRANSLATOR_MODEL", BACKENDS[translator][1] if translator in BACKENDS else "")
-    fallback_raw = os.environ.get("TRANSLATOR_FALLBACK", "deepseek/deepseek-v4-flash")
+    fallback_raw = os.environ.get("TRANSLATOR_FALLBACK", "openrouter/google/gemini-2.5-flash")
 
     return Config(
         port=args.port,

@@ -34,8 +34,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.model_lang, "en")
         self.assertEqual(cfg.model_lang_name, "English")
         self.assertEqual(cfg.translator, "openrouter")
-        self.assertEqual(cfg.translator_model, "google/gemini-2.5-flash")
-        self.assertEqual(cfg.translator_fallback, [("deepseek", "deepseek-v4-flash")])
+        self.assertEqual(cfg.translator_model, "deepseek/deepseek-v4-flash")
+        self.assertEqual(cfg.translator_fallback, [("openrouter", "google/gemini-2.5-flash")])
         self.assertTrue(cfg.translate_history)
         self.assertEqual(cfg.cache_size, 500)
         self.assertEqual(cfg.placeholder, "…")
@@ -202,7 +202,7 @@ class TranslatorTests(unittest.TestCase):
                       user_lang="pl", user_lang_name="Polish",
                       model_lang="en", model_lang_name="English",
                       translator="openrouter", translator_model="m",
-                      translator_fallback=fallback or [("deepseek", "deepseek-v4-flash")],
+                      translator_fallback=fallback or [("openrouter", "google/gemini-2.5-flash")],
                       translate_history=True, cache_size=5, guard_ratio=0.3,
                       translator_timeout=60, upstream_timeout=300, cerebras_base="c")
 
@@ -217,13 +217,13 @@ class TranslatorTests(unittest.TestCase):
         calls = []
 
         def fake(backend, model, prompt, text, cfg):
-            calls.append(backend)
-            if backend == "openrouter":
+            calls.append((backend, model))
+            if model == "m":  # primary translator model
                 raise TranslatorError("boom")
             return "Fallback result."
         out = translate_text("cos", self._cfg(), "pl", "en", call_backend=fake)
         self.assertEqual(out, "Fallback result.")
-        self.assertEqual(calls, ["openrouter", "deepseek"])
+        self.assertEqual(calls, [("openrouter", "m"), ("openrouter", "google/gemini-2.5-flash")])
 
     def test_whole_chain_fails_returns_original(self):
         def fake(backend, model, prompt, text, cfg):
