@@ -54,3 +54,37 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(parse_bool("true"))
         self.assertFalse(parse_bool("no"))
         self.assertTrue(parse_bool(None, True))
+from translate_proxy import protect, restore
+
+
+class ProtectTests(unittest.TestCase):
+    def test_fenced_block_verbatim(self):
+        t = "Zmien ten kod:\n```python\nprint('x')\n```\nDzieki."
+        p, spans = protect(t)
+        self.assertEqual(p, "Zmien ten kod:\n⟦0⟧\nDzieki.")
+        self.assertEqual(spans[0], "```python\nprint('x')\n```")
+        self.assertEqual(restore(p, spans), t)
+
+    def test_inline_code(self):
+        t = "Uzyj `npm install -g y` i gotowe."
+        p, spans = protect(t)
+        self.assertEqual(p, "Uzyj ⟦0⟧ i gotowe.")
+        self.assertEqual(spans[0], "`npm install -g y`")
+
+    def test_url(self):
+        t = "Zobacz https://example.com/abc i https://example.com/x?a=1."
+        p, spans = protect(t)
+        self.assertEqual(p, "Zobacz ⟦0⟧ i ⟦1⟧.")
+        self.assertEqual(len(spans), 2)
+        self.assertEqual(restore(p, spans), t)
+
+    def test_marker_inside_fence_not_double_matched(self):
+        t = "```\n`inline`\n```"
+        p, spans = protect(t)
+        self.assertEqual(p, "⟦0⟧")
+        self.assertEqual(len(spans), 1)
+
+    def test_restore_best_effort_missing_marker(self):
+        p, spans = protect("a `x` b")
+        out = restore("nie ma tu markera", spans)
+        self.assertEqual(out, "nie ma tu markera")

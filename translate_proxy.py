@@ -136,3 +136,28 @@ def load_config(argv=None) -> Config:
         health_only=args.health,
         stop_file=f"/tmp/translate-proxy-{args.port}.stop",
     )
+
+
+_MARK = "⟦"
+_MARK_END = "⟧"
+
+
+def protect(text: str):
+    """Extract fenced code blocks, inline code and URLs into ⟦N⟧ placeholders."""
+    spans = []
+
+    def repl(m):
+        spans.append(m.group(0).rstrip(".,;:!?"))
+        return f"{_MARK}{len(spans) - 1}{_MARK_END}"
+
+    t = re.sub(r"```[\s\S]*?```", repl, text)
+    t = re.sub(r"`[^`\n]+`", repl, t)
+    t = re.sub(r"https?://\S+(?<![.,;:!?])", repl, t)
+    return t, spans
+
+
+def restore(text: str, spans):
+    """Put the extracted spans back where their ⟦N⟧ placeholders are."""
+    for i, span in enumerate(spans):
+        text = text.replace(f"{_MARK}{i}{_MARK_END}", span)
+    return text
