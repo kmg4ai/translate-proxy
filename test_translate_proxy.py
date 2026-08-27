@@ -198,3 +198,78 @@ class TranslatorTests(unittest.TestCase):
         out2 = translate_text("   \n  ", self._cfg(), "pl", "en", call_backend=never)
         self.assertEqual(out, "")
         self.assertEqual(out2, "   \n  ")
+
+from translate_proxy import clear_cache, translate_anthropic_messages, translate_openai_messages
+
+
+class IngressTests(unittest.TestCase):
+    def setUp(self):
+        clear_cache()
+
+    def _cfg(self, history=True):
+        return Config(port=8800, upstream="u", verbose=False, placeholder="…",
+                      user_lang="pl", user_lang_name="Polish",
+                      model_lang="en", model_lang_name="English",
+                      translator="openrouter", translator_model="m", translator_fallback=[],
+                      translate_history=history, cache_size=5, guard_ratio=0.3,
+                      translator_timeout=60, upstream_timeout=300, cerebras_base="c")
+
+    def fake(self, calls):
+        return lambda backend, model, prompt, text, cfg: calls.append(text) or ("TRANS:" + text)
+
+    def never(self):
+        return lambda *a: (_ for _ in ()).throw(AssertionError("must not call backend"))
+
+    def test_anthropic_user_string(self):
+        body = {"model": "m", "messages": [{"role": "user", "content": "czesc swiecie"}]}
+        out = translate_anthropic_messages(body, self._cfg(), call_backend=self.fake([]))
+        self.assertEqual(out["messages"][0]["content"], "TRANS:czesc swiecie")
+
+    def test_anthropic_system_and_tool_untouched(self):
+        calls = []
+        body = {"system": [{"type": "text", "text": "You are a robot."}],
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "co to jest"},
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "ls /etc"},
+                ]}]}
+        out = translate_anthropic_messages(body, self._cfg(), call_backend=self.fake(calls))
+        self.assertEqual(out["system"][0]["text"], "You are a robot.")
+        self.assertEqual(out["messages"][0]["content"][0]["text"], "TRANS:co to jest")
+        self.assertEqual(out["messages"][0]["content"][1]["content"], "ls /etc")
+        self.assertEqual(calls, ["co to jest"])
+
+    def test_anthropic_code_fence_not_translated(self):
+        body = {"messages": [{"role": "user", "content": "Zrob:\n```py\nx=1\n```\nok?"}]}
+        out = translate_anthropic_messages(body, self._cfg(), call_backend=self.fake([]))
+        self.assertIn("```py", out["messages"][0]["content"])
+        self.assertIn("x=1", out["messages"][0]["content"])
+
+    def test_anthropic_english_passthrough(self):
+        body = {"messages": [{"role": "user",
+                              "content": "Please show me the list of files in this directory."}]}
+        out = translate_anthropic_messages(body, self._cfg(), call_backend=self.never())
+        self.assertEqual(out["messages"][0]["content"],
+                         "Please show me the list of files in this directory.")
+
+    def test_anthropic_history_disabled(self):
+        body = {"messages": [{"role": "assistant", "content": "Odpowiedz po polsku."}]}
+        out = translate_anthropic_messages(body, self._cfg(history=False), call_backend=self.never())
+        self.assertEqual(out["messages"][0]["content"], "Odpowiedz po polsku.")
+
+    def test_anthropic_history_translated(self):
+        body = {"messages": [{"role": "assistant", "content": "To jest odpowiedz modelu."}]}
+        out = translate_anthropic_messages(body, self._cfg(history=True), call_backend=self.fake([]))
+        self.assertEqual(out["messages"][0]["content"], "TRANS:To jest odpowiedz modelu.")
+
+    def test_openai_user_string_and_tool_calls_untouched(self):
+        body = {"messages": [
+            {"role": "user", "content": "szybko policz"},
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"id": "x", "type": "function",
+                             "function": {"name": "calc", "arguments": "{1+1}"}}]},
+            {"role": "tool", "tool_call_id": "x", "content": "2"},
+        ]}
+        out = translate_openai_messages(body, self._cfg(), call_backend=self.fake([]))
+        self.assertEqual(out["messages"][0]["content"], "TRANS:szybko policz")
+        self.assertEqual(out["messages"][1]["tool_calls"][0]["function"]["name"], "calc")
+        self.assertEqual(out["messages"][2]["content"], "2")

@@ -169,14 +169,20 @@ was we were what when where which who will with you your""".split())
 
 
 def guard_skip(text: str, cfg: Config) -> bool:
-    """True when text already looks like MODEL_LANG (English stopword ratio high)."""
+    """True when text already looks like MODEL_LANG (English stopword ratio high).
+
+    Requires at least 2 English-stopword hits in addition to the ratio. Short Polish
+    phrases like "zrob to" and "co to jest" contain "to" (an English stopword) and would
+    otherwise be wrongly skipped by the ratio alone; pasted English (a long block with
+    many hits) is still detected.
+    """
     if cfg.model_lang != "en":
         return False
     words = re.findall(r"[a-zA-Z]+", text.lower())
     if not words:
         return False
     hits = sum(1 for w in words if w in STOPWORDS_EN)
-    return (hits / len(words)) >= cfg.guard_ratio
+    return hits >= 2 and (hits / len(words)) >= cfg.guard_ratio
 
 
 class TranslatorError(Exception):
@@ -280,3 +286,42 @@ def translate_text(text, cfg, src, dst, direction="ingress", call_backend=None):
         return text  # whole chain failed → original
     _cache_put(key, out, cfg.cache_size)
     return restore(out, spans)
+
+
+def translate_anthropic_messages(body, cfg, call_backend=None):
+    """Translate user + assistant text (USER_LANG -> MODEL_LANG) in an Anthropic /v1/messages body."""
+    # system (string or list of blocks), tools, tool_choice: never touched.
+    for msg in body.get("messages", []):
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        if role == "assistant" and not cfg.translate_history:
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            msg["content"] = translate_text(content, cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
+        elif isinstance(content, list):
+            for blk in content:
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    blk["text"] = translate_text(blk.get("text", ""), cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
+                # tool_use / tool_result / thinking blocks untouched
+    return body
+
+
+def translate_openai_messages(body, cfg, call_backend=None):
+    """Translate user + assistant text in an OpenAI /v1/chat/completions body."""
+    for msg in body.get("messages", []):
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        if role == "assistant" and not cfg.translate_history:
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            msg["content"] = translate_text(content, cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    part["text"] = translate_text(part.get("text", ""), cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
+                # tool_calls / other parts untouched
+    return body
