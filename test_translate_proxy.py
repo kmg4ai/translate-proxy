@@ -3,8 +3,29 @@ import unittest
 
 from translate_proxy import load_config, lang_name, parse_bool, parse_fallback
 
+# Every env var load_config reads; ConfigTests snapshots and clears these so the
+# suite is hermetic even when the developer's shell sets them (e.g. USER_LANG=pl).
+CONFIG_ENV_VARS = (
+    "USER_LANG", "USER_LANG_NAME", "MODEL_LANG", "MODEL_LANG_NAME",
+    "TRANSLATOR", "TRANSLATOR_MODEL", "TRANSLATOR_FALLBACK", "TRANSLATE_HISTORY",
+    "CACHE_SIZE", "GUARD_STOPWORD_RATIO", "PLACEHOLDER", "UPSTREAM", "PORT",
+    "VERBOSE", "CEREBRAS_BASE", "TRANSLATOR_TIMEOUT", "UPSTREAM_TIMEOUT",
+)
+
 
 class ConfigTests(unittest.TestCase):
+    def setUp(self):
+        self._saved_env = {k: os.environ.get(k) for k in CONFIG_ENV_VARS}
+        for k in CONFIG_ENV_VARS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
     def test_defaults(self):
         cfg = load_config(["--upstream", "http://127.0.0.1:8799"])
         self.assertEqual(cfg.port, 8800)
@@ -180,6 +201,16 @@ class TranslatorTests(unittest.TestCase):
         self.assertIn("print(1)", out)
         self.assertIn("```python", out)
 
+    def test_literal_marker_survives_translation(self):
+        def fake(backend, model, prompt, text, cfg):
+            return text  # echo the protected text back unchanged
+
+        cfg = self._cfg()
+        src = "Zobacz ⟦0⟧ i https://example.com."
+        out = translate_text(src, cfg, "pl", "en", call_backend=fake)
+        # the literal ⟦0⟧ must survive intact — not substituted with the URL span
+        self.assertEqual(out, src)
+
     def test_english_input_guard_skips_backend(self):
         cfg = self._cfg()
 
@@ -273,6 +304,40 @@ class IngressTests(unittest.TestCase):
         self.assertEqual(out["messages"][0]["content"], "TRANS:szybko policz")
         self.assertEqual(out["messages"][1]["tool_calls"][0]["function"]["name"], "calc")
         self.assertEqual(out["messages"][2]["content"], "2")
+
+    def test_anthropic_tool_use_and_thinking_untouched(self):
+        calls = []
+        body = {"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "co to jest"},
+            {"type": "thinking", "thinking": "Mysle po angielsku."},
+            {"type": "tool_use", "id": "t1", "name": "bash", "input": {"cmd": "ls"}},
+        ]}]}
+        out = translate_anthropic_messages(body, self._cfg(), call_backend=self.fake(calls))
+        self.assertEqual(out["messages"][0]["content"][0]["text"], "TRANS:co to jest")
+        self.assertEqual(out["messages"][0]["content"][1]["thinking"], "Mysle po angielsku.")
+        self.assertEqual(out["messages"][0]["content"][2]["input"]["cmd"], "ls")
+        self.assertEqual(calls, ["co to jest"])
+
+    def test_openai_content_list_translates_only_text(self):
+        calls = []
+        body = {"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "co jest na obrazku"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        ]}]}
+        out = translate_openai_messages(body, self._cfg(), call_backend=self.fake(calls))
+        self.assertEqual(out["messages"][0]["content"][0]["text"], "TRANS:co jest na obrazku")
+        self.assertEqual(out["messages"][0]["content"][1]["image_url"]["url"], "data:image/png;base64,AAA")
+        self.assertEqual(calls, ["co jest na obrazku"])
+
+    def test_openai_assistant_history_translated(self):
+        body = {"messages": [{"role": "assistant", "content": "To jest historia."}]}
+        out = translate_openai_messages(body, self._cfg(history=True), call_backend=self.fake([]))
+        self.assertEqual(out["messages"][0]["content"], "TRANS:To jest historia.")
+
+    def test_openai_assistant_history_disabled(self):
+        body = {"messages": [{"role": "assistant", "content": "To jest historia."}]}
+        out = translate_openai_messages(body, self._cfg(history=False), call_backend=self.never())
+        self.assertEqual(out["messages"][0]["content"], "To jest historia.")
 
 import json
 
@@ -375,6 +440,11 @@ class EgressTests(unittest.TestCase):
         tool_deltas = [c["choices"][0]["delta"].get("tool_calls") for c in out]
         self.assertTrue(any(td is not None for td in tool_deltas))
         self.assertTrue(any(c["choices"][0].get("finish_reason") == "tool_calls" for c in out))
+        # exactly one tool_calls chunk, and it must precede the finish_reason chunk
+        tool_chunks = [c for c in out if c["choices"][0]["delta"].get("tool_calls") is not None]
+        self.assertEqual(len(tool_chunks), 1)
+        finish_idx = next(i for i, c in enumerate(out) if c["choices"][0].get("finish_reason"))
+        self.assertIn(tool_chunks[0], out[:finish_idx])
 import json
 import threading
 import urllib.request
@@ -422,6 +492,27 @@ class HttpTests(unittest.TestCase):
                             "stop_reason": "end_turn", "usage": {"input_tokens": 5, "output_tokens": 2}}
                     data = json.dumps(resp).encode("utf-8")
                     self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                elif path == "/v1/chat/completions" and body.get("stream"):
+                    resp = (
+                        'data: {"id":"a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}\n\n'
+                        'data: {"id":"a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello "}}]}\n\n'
+                        'data: {"id":"a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"streaming"}}]}\n\n'
+                        'data: {"id":"a","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                        'data: [DONE]\n\n'
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp.encode("utf-8"))
+                elif path == "/v1/chat/completions" and body.get("trigger_error"):
+                    resp = '{"error": {"message": "upstream exploded"}}'
+                    data = resp.encode("utf-8")
+                    self.send_response(500)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
@@ -535,6 +626,23 @@ class HttpTests(unittest.TestCase):
                                      {"model": "m", "messages": [{"role": "user", "content": "Czesc"}]})
         self.assertEqual(status, 200)
         self.assertIn("Hello openai.", body)
+
+    def test_openai_stream_translated(self):
+        status, body, ctype = self._post(self.proxy, "/v1/chat/completions",
+                                         {"model": "m", "stream": True,
+                                          "messages": [{"role": "user", "content": "Czesc"}]})
+        self.assertEqual(status, 200)
+        self.assertIn("text/event-stream", ctype)
+        self.assertIn("Hello streaming", body)  # echoed translated egress text
+        self.assertIn("…", body)                # placeholder
+        self.assertIn("[DONE]", body)
+
+    def test_upstream_http_error_passthrough(self):
+        status, body, _ = self._post(self.proxy, "/v1/chat/completions",
+                                     {"model": "m", "trigger_error": True,
+                                      "messages": [{"role": "user", "content": "Czesc"}]})
+        self.assertEqual(status, 500)
+        self.assertIn("upstream exploded", body)
 
     def test_upstream_down_502(self):
         status, body, _ = self._post(self.bad, "/v1/messages",
