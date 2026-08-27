@@ -44,13 +44,13 @@ All config is via environment variables (see `.env.example`).
 | `CACHE_SIZE` | `500` | in-memory translation cache bound |
 | `GUARD_STOPWORD_RATIO` | `0.3` | above this English-stopword ratio input is passed through untranslated |
 | `PLACEHOLDER` | `…` | shown while the egress answer is being translated |
-| `OPENROUTER_API_KEY` | — | required for `openrouter` |
-| `DEEPSEEK_API_KEY` | — | required for `deepseek` |
+| `OPENROUTER_API_KEY` | — | needed to translate via `openrouter` (without it that backend is skipped) |
+| `DEEPSEEK_API_KEY` | — | needed to translate via `deepseek` (without it that backend is skipped) |
 
 Backends:
 
-- `openrouter` — `https://openrouter.ai/api/v1/chat/completions`, key `OPENROUTER_API_KEY`;
-- `deepseek` — `https://api.deepseek.com/chat/completions`, key `DEEPSEEK_API_KEY`, model `deepseek-v4-flash`;
+- `openrouter` — `https://openrouter.ai/api/v1/chat/completions`, needs `OPENROUTER_API_KEY`;
+- `deepseek` — `https://api.deepseek.com/chat/completions`, needs `DEEPSEEK_API_KEY`, model `deepseek-v4-flash`;
 - `cerebras` — local gateway, `CEREBRAS_BASE` (default `http://127.0.0.1:8001/v1`), no key.
 
 ## Add your own language
