@@ -109,6 +109,40 @@ class ProtectTests(unittest.TestCase):
         p, spans = protect("a `x` b")
         out = restore("nie ma tu markera", spans)
         self.assertEqual(out, "nie ma tu markera")
+
+    def test_marker_inside_fence_roundtrips(self):
+        t = "```\n⟦7⟧\n```"
+        p, spans = protect(t)
+        self.assertEqual(p, "⟦0⟧")
+        self.assertEqual(spans[0], t)
+        self.assertEqual(restore(p, spans), t)
+
+    def test_marker_inside_inline_code_roundtrips(self):
+        t = "`⟦3⟧`"
+        p, spans = protect(t)
+        self.assertEqual(p, "⟦0⟧")
+        self.assertEqual(spans[0], t)
+        self.assertEqual(restore(p, spans), t)
+
+    def test_standalone_prose_marker_roundtrips(self):
+        t = "hello ⟦0⟧ world"
+        p, spans = protect(t)
+        self.assertEqual(spans, ["⟦0⟧"])
+        self.assertEqual(restore(p, spans), t)
+
+    def test_prose_marker_mixed_with_code_roundtrips(self):
+        t = "⟦3⟧ and `code`"
+        p, spans = protect(t)
+        self.assertEqual(p, "⟦0⟧ and ⟦1⟧")
+        self.assertEqual(spans, ["⟦3⟧", "`code`"])
+        self.assertEqual(restore(p, spans), t)
+
+    def test_fence_inline_url_all_roundtrip(self):
+        t = "```fence``` and plain `inline` and https://x.dev text"
+        p, spans = protect(t)
+        self.assertEqual(p, "⟦0⟧ and plain ⟦1⟧ and ⟦2⟧ text")
+        self.assertEqual(spans, ["```fence```", "`inline`", "https://x.dev"])
+        self.assertEqual(restore(p, spans), t)
 from translate_proxy import Config, guard_skip
 
 

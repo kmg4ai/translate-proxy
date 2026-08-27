@@ -145,28 +145,45 @@ _MARK_END = "⟧"
 def protect(text: str):
     """Extract fenced code blocks, inline code and URLs into ⟦N⟧ placeholders.
 
-    Literal ⟦N⟧ marker-looking sequences already present in the input are wrapped as
-    spans that map back to themselves, so a later restore() is idempotent and can never
-    substitute a real code/URL span into them.
+    A single left-to-right pass matches each code/URL span OR a literal ⟦N⟧ marker that
+    is not inside one (a marker inside a fence/backtick/URL is consumed as part of that
+    span). Spans are indexed strictly by appearance order, and re.sub never re-scans an
+    inserted placeholder, so:
+      - a literal marker inside a code/URL span stays inside the span value and
+        round-trips unchanged;
+      - a literal marker in prose is wrapped as a span mapping back to itself, so a later
+        restore() can never substitute a real code/URL span into it — its literal index
+        value never collides with a generated placeholder's index because indices are
+        positional, not derived from the marker text.
     """
     spans = []
 
     def repl(m):
-        spans.append(m.group(0).rstrip(".,;:!?"))
+        if m.group(1) is not None:
+            spans.append(m.group(0))  # literal ⟦N⟧ marker in prose → self-span back to itself
+        else:
+            spans.append(m.group(0).rstrip(".,;:!?"))
         return f"{_MARK}{len(spans) - 1}{_MARK_END}"
 
-    t = re.sub(rf"{_MARK}\d+{_MARK_END}", repl, text)
-    t = re.sub(r"```[\s\S]*?```", repl, t)
-    t = re.sub(r"`[^`\n]+`", repl, t)
-    t = re.sub(r"https?://\S+(?<![.,;:!?])", repl, t)
+    t = re.sub(
+        r"```[\s\S]*?```|`[^`\n]+`|https?://\S+(?<![.,;:!?])|⟦(\d+)⟧",
+        repl, text,
+    )
     return t, spans
 
 
 def restore(text: str, spans):
-    """Put the extracted spans back where their ⟦N⟧ placeholders are."""
-    for i, span in enumerate(spans):
-        text = text.replace(f"{_MARK}{i}{_MARK_END}", span)
-    return text
+    """Put the extracted spans back where their ⟦N⟧ placeholders are.
+
+    Single-pass substitution so span VALUES are never re-scanned: the old loop's
+    str.replace re-matched placeholders that appeared inside already-inserted span values.
+    """
+    def repl(m):
+        i = int(m.group(1))
+        if 0 <= i < len(spans):
+            return spans[i]
+        return m.group(0)  # unknown/missing span → leave the marker as-is (best effort)
+    return re.sub(rf"{_MARK}(\d+){_MARK_END}", repl, text)
 
 
 STOPWORDS_EN = frozenset("""a an and are as at be but by did do does for from had has have he her his
