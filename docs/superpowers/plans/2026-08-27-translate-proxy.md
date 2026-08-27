@@ -344,12 +344,12 @@ def protect(text: str):
     spans = []
 
     def repl(m):
-        spans.append(m.group(0))
+        spans.append(m.group(0).rstrip(".,;:!?"))
         return f"{_MARK}{len(spans) - 1}{_MARK_END}"
 
     t = re.sub(r"```[\s\S]*?```", repl, text)
     t = re.sub(r"`[^`\n]+`", repl, t)
-    t = re.sub(r"https?://\S+", repl, t)
+    t = re.sub(r"https?://\S+(?<![.,;:!?])", repl, t)
     return t, spans
 
 
