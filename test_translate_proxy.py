@@ -61,6 +61,16 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             load_config([])
 
+    def test_stop_without_upstream(self):
+        cfg = load_config(["--stop"])
+        self.assertTrue(cfg.stop_requested)
+        self.assertIsNone(cfg.upstream)
+
+    def test_health_without_upstream(self):
+        cfg = load_config(["--health"])
+        self.assertTrue(cfg.health_only)
+        self.assertIsNone(cfg.upstream)
+
     def test_lang_name_unknown_falls_back(self):
         self.assertEqual(lang_name("xx"), "xx")
 

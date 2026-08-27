@@ -105,7 +105,8 @@ def load_config(argv=None) -> Config:
     ap.add_argument("--stop", action="store_true", help="request the running instance to stop")
     ap.add_argument("--health", action="store_true", help="print GET /health of the running instance")
     args = ap.parse_args(argv)
-    if not args.upstream:
+    # --stop and --health only need the port; upstream is required to serve.
+    if not args.upstream and not args.stop and not args.health:
         ap.error("--upstream is required (or UPSTREAM env)")
 
     user_lang = os.environ.get("USER_LANG", "pl").strip().lower()
