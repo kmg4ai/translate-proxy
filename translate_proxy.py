@@ -288,6 +288,22 @@ def translate_text(text, cfg, src, dst, direction="ingress", call_backend=None):
     return restore(out, spans)
 
 
+def _translate_content(content, cfg, call_backend):
+    """Translate the text parts of a message's content (str or list of blocks).
+
+    Non-text blocks (tool_use, tool_result, thinking, image_url, tool_calls)
+    pass through untouched.
+    """
+    if isinstance(content, str):
+        return translate_text(content, cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
+    if isinstance(content, list):
+        for blk in content:
+            if isinstance(blk, dict) and blk.get("type") == "text":
+                blk["text"] = translate_text(blk.get("text", ""), cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
+        return content
+    return content
+
+
 def translate_anthropic_messages(body, cfg, call_backend=None):
     """Translate user + assistant text (USER_LANG -> MODEL_LANG) in an Anthropic /v1/messages body."""
     # system (string or list of blocks), tools, tool_choice: never touched.
@@ -297,14 +313,7 @@ def translate_anthropic_messages(body, cfg, call_backend=None):
             continue
         if role == "assistant" and not cfg.translate_history:
             continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            msg["content"] = translate_text(content, cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
-        elif isinstance(content, list):
-            for blk in content:
-                if isinstance(blk, dict) and blk.get("type") == "text":
-                    blk["text"] = translate_text(blk.get("text", ""), cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
-                # tool_use / tool_result / thinking blocks untouched
+        msg["content"] = _translate_content(msg.get("content"), cfg, call_backend)
     return body
 
 
@@ -316,12 +325,5 @@ def translate_openai_messages(body, cfg, call_backend=None):
             continue
         if role == "assistant" and not cfg.translate_history:
             continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            msg["content"] = translate_text(content, cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    part["text"] = translate_text(part.get("text", ""), cfg, cfg.user_lang, cfg.model_lang, "ingress", call_backend)
-                # tool_calls / other parts untouched
+        msg["content"] = _translate_content(msg.get("content"), cfg, call_backend)
     return body
