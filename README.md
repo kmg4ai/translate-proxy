@@ -25,7 +25,7 @@ through — no translation, nothing to pay.
   its strongest language. Better reasoning, and you never waste tokens on "sorry,
   could you say that in English?".
 - 💸 **Save tokens** — say it once, in your language, done.
-- 📉 **Save ~10–20%** on mid-range and premium models (measured). 📈 **Save 140%.**
+- 📉 **Save ~35–65%** on mid-range and premium models (measured). 📈 **Save 140%.**
   (Math says you can't save more than 100%, but our heart says otherwise.)
 - 🤖 Works with Claude Code, opencode, Hermes — anything that speaks the Anthropic or
   OpenAI wire formats.
@@ -71,39 +71,65 @@ Cost per **single translation** (one direction):
 Measured on this repo: a typical exchange is a ~120-token prompt and a ~250-token
 answer. "Without" = you write in your language, the model answers in your language.
 "With" = your words reach the model in English and the answer comes back translated
-(deepseek-v4-flash translator, ≈$0.00007 per exchange). Numbers cover the whole
+(deepseek-v4-flash translator, ≈$0.0001 per exchange). Numbers cover the whole
 exchange — main model + translation — at current DeepSeek prices:
 
 | Main model ($/M in / out) | 1 exchange, without | 1 exchange, with proxy | 30 exchanges, without | 30 exchanges, with proxy |
 |---|---|---|---|---|
-| `deepseek-v4-flash` ($0.08 / $0.16) — passed through | $0.00006 | $0.00006 | $0.0017 | $0.0017 |
-| mid-tier, e.g. Sonnet ($3 / $15) | $0.0050 | $0.0038 | $0.150 | $0.114 |
-| premium, e.g. Opus ($15 / $75) | $0.025 | $0.019 | $0.75 | $0.56 |
+| `deepseek-v4-flash` ($0.08 / $0.16) — passed through | $0.00008 | $0.00008 | $0.0025 | $0.0025 |
+| mid-tier, e.g. Sonnet ($3 / $15) | $0.0075 | $0.0042 | $0.226 | $0.127 |
+| premium, e.g. Opus ($15 / $75) | $0.038 | $0.021 | $1.13 | $0.62 |
+
+#### Cost by your language — before vs after the proxy
+
+How much your language costs next to English on the main model's tokenizer, and what
+the proxy changes. Measured on an identical code-related exchange (a Python question +
+explanation; prose-only chat runs a bit higher). Baseline: one ~120-token prompt + one
+~250-token answer, premium main ($15 / $75). Ratios measured with the **cl100k
+tokenizer** (Anthropic family) for the main-model leg and **deepseek-v4-flash's own
+tokenizer** for the translator leg:
+
+| Your language | tokens vs English | 1 exchange, without | 1 exchange, with proxy | 30 exchanges, without | 30 exchanges, with proxy | you save |
+|---|---|---|---|---|---|---|
+| English | 1.0× | $0.021 | $0.021 | $0.62 | $0.62 | — |
+| Polish | 1.8× | $0.038 | $0.021 | $1.13 | $0.62 | ~45% |
+| German | 1.6× | $0.034 | $0.021 | $1.01 | $0.62 | ~39% |
+| Japanese | 2.3× | $0.047 | $0.021 | $1.40 | $0.62 | ~56% |
+| Arabic | 2.8× | $0.058 | $0.021 | $1.73 | $0.62 | ~64% |
+| Chinese | 1.6× | $0.032 | $0.021 | $0.96 | $0.62 | ~36% |
+
+The "with proxy" column is ~the same for every language — that's the point. Translation
+itself costs ≈$0.0001 no matter your language; the entire saving is the main model
+billing **English instead of your (longer) language**. Same shape on mid-tier mains
+(Sonnet $3 / $15): ~35–63% per language. Fun fact: deepseek's tokenizer is optimized
+for Chinese — it bills Chinese *under* English (0.92×) — so Chinese pays the least for
+translation and still saves on the main model.
 
 What this means:
 
 - **Cheap main model** (like `deepseek-v4-flash` itself): passed through untranslated,
-  so the proxy adds **$0**. A whole 30-exchange session is **$0.0017** — you pay exactly
+  so the proxy adds **$0**. A whole 30-exchange session is **$0.0025** — you pay exactly
   what you'd pay without the proxy.
-- **Mid and premium mains**: the proxy is **~24–25% cheaper** — English takes ~1.3×
-  fewer tokens than Polish on the same model, and that saving beats the translation
-  cost. A 30-exchange premium session: **$0.56 with proxy vs $0.75 without**.
+- **Mid and premium mains**: the proxy is **~45% cheaper** for Polish — English takes
+  ~1.8× fewer tokens than Polish on the main model, and that saving beats the
+  translation cost. A 30-exchange premium session: **$0.62 with proxy vs $1.13 without**.
 
 #### Why the proxy skips DeepSeek — translation costs ≈2× the exchange itself
 
 `deepseek-v4-flash`, `deepseek-pro` (and anything else in `SKIP_TRANSLATION_MODELS`)
 pass through **untranslated**. It's not about quality — it's arithmetic.
 
-That ~$0.00006 exchange is ~370 main-model tokens. Translating it costs **two extra
-round-trips through the same model**, and the translated text is about the size of the
-original (in: ~120 tokens read + ~120 written; out: ~250 read + ~250 written). That's
-roughly **$0.00007–0.00012 of translation** — *as much as, or more than, the exchange
+That ~$0.00008 exchange is ~630 Polish tokens on the deepseek tokenizer. Translating it
+costs **two extra round-trips through the same model**, and the translated text is about
+the size of the original (in: ~205 tokens read + ~120 written; out: ~250 read + ~425
+written). That's roughly **$0.0001 of translation** — *more than the $0.00008 exchange
 itself*. Translate both sides and you've **~doubled your bill** for no reasoning gain:
 a model that cheap has no cheaper language to think in.
 
 On mid-range and premium models the same two translations are a rounding error next to
-the main-model saving — English is ~1.3× cheaper than your language, so the proxy is
-still ~24–25% cheaper overall. DeepSeek is the one case where the arithmetic flips.
+the main-model saving — English is ~1.8× cheaper than Polish (up to ~2.8× for Arabic),
+so the proxy is still ~36–64% cheaper overall. DeepSeek is the one case where the
+arithmetic flips.
 
 So the proxy **detects the main model automatically** and skips translation when it's
 not worth it: cheap models (`deepseek-v4-flash`, `deepseek-pro`, default) pass through
