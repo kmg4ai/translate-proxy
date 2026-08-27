@@ -55,15 +55,18 @@ Backends:
 
 ## Add your own language
 
-Pick any pair, e.g. German → English:
+Pick any pair — the proxy is for any person, any language. `USER_LANG` alone is enough
+for ~100 built-in language codes, e.g. German → English:
 
 ```bash
-USER_LANG=de USER_LANG_NAME=German MODEL_LANG=en MODEL_LANG_NAME=English \
+USER_LANG=de MODEL_LANG=en \
 python3 translate_proxy.py --upstream http://127.0.0.1:8799
 ```
 
-Unknown language codes fall back to the code itself for the prompt. If your `MODEL_LANG`
-isn't English, the already-English guard is disabled (nothing to guard against).
+For a code not in the built-in list, also set `USER_LANG_NAME` (the language's English
+name), e.g. `USER_LANG=xx USER_LANG_NAME=...`; otherwise it falls back to the code itself
+in the prompt. If your `MODEL_LANG` isn't English, the already-English guard is disabled
+(nothing to guard against).
 
 ## How it works
 

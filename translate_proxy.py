@@ -28,6 +28,26 @@ LANG_NAMES = {
     "tr": "Turkish", "hu": "Hungarian", "ro": "Romanian", "sk": "Slovak", "bg": "Bulgarian",
     "el": "Greek", "hr": "Croatian", "sr": "Serbian", "lt": "Lithuanian", "lv": "Latvian",
     "et": "Estonian", "sl": "Slovenian",
+    # every-language UX: USER_LANG alone should name the language; obscure codes
+    # not listed here fall back to the code itself (or set USER_LANG_NAME).
+    "zh": "Chinese", "ja": "Japanese", "ko": "Korean", "ar": "Arabic", "he": "Hebrew",
+    "hi": "Hindi", "bn": "Bengali", "ur": "Urdu", "pa": "Punjabi", "ta": "Tamil",
+    "te": "Telugu", "mr": "Marathi", "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam",
+    "ne": "Nepali", "si": "Sinhala", "th": "Thai", "vi": "Vietnamese",
+    "id": "Indonesian", "ms": "Malay", "tl": "Filipino", "km": "Khmer", "my": "Burmese",
+    "lo": "Lao", "mn": "Mongolian", "jv": "Javanese", "ceb": "Cebuano",
+    "mi": "Maori", "haw": "Hawaiian", "sm": "Samoan", "fj": "Fijian",
+    "sw": "Swahili", "am": "Amharic", "ha": "Hausa", "yo": "Yoruba", "ig": "Igbo",
+    "zu": "Zulu", "xh": "Xhosa", "af": "Afrikaans", "so": "Somali", "mg": "Malagasy",
+    "wo": "Wolof", "rw": "Kinyarwanda", "sn": "Shona", "st": "Sesotho", "tn": "Tswana",
+    "ee": "Ewe", "ak": "Akan", "ti": "Tigrinya", "om": "Oromo",
+    "fa": "Persian", "ps": "Pashto", "ku": "Kurdish", "uz": "Uzbek", "kk": "Kazakh",
+    "az": "Azerbaijani", "hy": "Armenian", "ka": "Georgian", "tg": "Tajik",
+    "tk": "Turkmen", "ky": "Kyrgyz",
+    "cy": "Welsh", "ga": "Irish", "gd": "Scottish Gaelic", "mt": "Maltese",
+    "sq": "Albanian", "mk": "Macedonian", "be": "Belarusian", "is": "Icelandic",
+    "bs": "Bosnian", "ca": "Catalan", "gl": "Galician", "eu": "Basque",
+    "lb": "Luxembourgish", "fy": "Frisian",
 }
 
 

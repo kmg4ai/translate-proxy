@@ -74,6 +74,13 @@ class ConfigTests(unittest.TestCase):
     def test_lang_name_unknown_falls_back(self):
         self.assertEqual(lang_name("xx"), "xx")
 
+    def test_lang_name_world_coverage(self):
+        # any arbitrary person's language should name itself from USER_LANG alone
+        for code, name in [("ja", "Japanese"), ("zh", "Chinese"), ("ko", "Korean"),
+                           ("ar", "Arabic"), ("hi", "Hindi"), ("vi", "Vietnamese"),
+                           ("sw", "Swahili"), ("fa", "Persian")]:
+            self.assertEqual(lang_name(code), name)
+
     def test_parse_fallback_forms(self):
         self.assertEqual(
             parse_fallback("deepseek/deepseek-v4-flash, cerebras"),
