@@ -56,7 +56,7 @@ Backends:
 ## Add your own language
 
 Pick any pair — the proxy is for any person, any language. `USER_LANG` alone is enough
-for ~100 built-in language codes, e.g. German → English:
+for ~100 built-in language codes (the full code list is in `.env.example`), e.g. German → English:
 
 ```bash
 USER_LANG=de MODEL_LANG=en \
