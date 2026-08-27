@@ -1419,7 +1419,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python3 -m unittest -v test_translate_proxy.HttpTests`
-Expected: 6 tests PASS. Then full suite: 43 PASS.
+Expected: 6 tests PASS. Then full suite: 44 PASS (38 pre-task + 6 HttpTests; Task 6 added one regression test beyond the plan's 37).
 
 Smoke: `python3 translate_proxy.py --upstream http://127.0.0.1:8799 --health` should print `{"ok": false}` (nothing listening on :8800 yet) — expected, the real service comes later. `python3 translate_proxy.py --upstream http://127.0.0.1:8799 --port 18800 --health` → `{"ok": false}`.
 
