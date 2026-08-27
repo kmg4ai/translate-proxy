@@ -177,3 +177,106 @@ def guard_skip(text: str, cfg: Config) -> bool:
         return False
     hits = sum(1 for w in words if w in STOPWORDS_EN)
     return (hits / len(words)) >= cfg.guard_ratio
+
+
+class TranslatorError(Exception):
+    pass
+
+
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_get(key):
+    with _cache_lock:
+        return _cache.get(key)
+
+
+def _cache_put(key, value, cap):
+    with _cache_lock:
+        if key not in _cache and len(_cache) >= cap:
+            _cache.pop(next(iter(_cache)))  # FIFO eviction of the oldest entry
+        _cache[key] = value
+
+
+def clear_cache():
+    with _cache_lock:
+        _cache.clear()
+
+
+def build_prompt(src_name, dst_name, direction="ingress"):
+    guard = ("The input may be written without diacritics (e.g. Polish without ą/ę/ś) — "
+             "reconstruct the intended words, do not translate letter-by-letter. ")
+    if direction == "egress":
+        head = f"Translate the following {src_name} text into {dst_name}, in natural, idiomatic {dst_name}. "
+    else:
+        head = f"Translate the following {src_name} text into {dst_name}. "
+    return (f"You are a professional translator. {head}{guard}"
+            "Keep every ⟦N⟧ placeholder exactly as written (they are code blocks, inline code, or "
+            "URLs that must not change). Keep URLs, numbers, and technical terms unchanged. "
+            "Output only the translation, nothing else.")
+
+
+def _call_backend(backend, model, prompt, user_text, cfg):
+    if backend not in BACKENDS:
+        raise TranslatorError(f"unknown backend: {backend}")
+    url, default_model, key_env = BACKENDS[backend]
+    if url is None:
+        url = cfg.cerebras_base.rstrip("/") + "/chat/completions"
+    if not model:
+        model = default_model
+    key = os.environ.get(key_env) if key_env else None
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_text},
+        ],
+        "temperature": 0.0,
+    }
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=cfg.translator_timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        raise TranslatorError(f"{backend} failed: {e}") from e
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise TranslatorError(f"{backend} returned unexpected payload: {data}") from e
+
+
+def call_with_fallback(prompt, user_text, cfg, call_backend=None):
+    """Try the primary backend then each fallback; return first non-empty translation or None."""
+    chain = [(cfg.translator, cfg.translator_model)] + list(cfg.translator_fallback)
+    for backend, model in chain:
+        try:
+            out = (call_backend or _call_backend)(backend, model, prompt, user_text, cfg)
+        except TranslatorError as e:
+            print(f"[translate-proxy] translator {backend}/{model or 'default'} failed: {e}", file=sys.stderr)
+            continue
+        if out:
+            return out.strip()
+    return None
+
+
+def translate_text(text, cfg, src, dst, direction="ingress", call_backend=None):
+    """Translate one text span. Returns the original text when the whole chain fails."""
+    if not text or not text.strip():
+        return text
+    if direction == "ingress" and guard_skip(text, cfg):
+        return text
+    protected, spans = protect(text)
+    key = (src, dst, protected)
+    cached = _cache_get(key)
+    if cached is not None:
+        return restore(cached, spans)
+    prompt = build_prompt(lang_name(src), lang_name(dst), direction)
+    out = call_with_fallback(prompt, protected, cfg, call_backend)
+    if out is None:
+        return text  # whole chain failed → original
+    _cache_put(key, out, cfg.cache_size)
+    return restore(out, spans)

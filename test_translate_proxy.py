@@ -118,3 +118,83 @@ class GuardTests(unittest.TestCase):
 
     def test_non_en_model_lang_never_skips(self):
         self.assertFalse(guard_skip("This is clearly English text.", self._cfg(model_lang="de")))
+from translate_proxy import Config, TranslatorError, clear_cache, translate_text
+
+
+class TranslatorTests(unittest.TestCase):
+    def setUp(self):
+        clear_cache()
+
+    def _cfg(self, fallback=None):
+        return Config(port=8800, upstream="u", verbose=False, placeholder="…",
+                      user_lang="pl", user_lang_name="Polish",
+                      model_lang="en", model_lang_name="English",
+                      translator="openrouter", translator_model="m",
+                      translator_fallback=fallback or [("deepseek", "deepseek-v4-flash")],
+                      translate_history=True, cache_size=5, guard_ratio=0.3,
+                      translator_timeout=60, upstream_timeout=300, cerebras_base="c")
+
+    def test_primary_success(self):
+        def fake(backend, model, prompt, text, cfg):
+            self.assertEqual(backend, "openrouter")
+            return "The translated text."
+        out = translate_text("Przetlumacz mnie.", self._cfg(), "pl", "en", call_backend=fake)
+        self.assertEqual(out, "The translated text.")
+
+    def test_fallback_used_when_primary_fails(self):
+        calls = []
+
+        def fake(backend, model, prompt, text, cfg):
+            calls.append(backend)
+            if backend == "openrouter":
+                raise TranslatorError("boom")
+            return "Fallback result."
+        out = translate_text("cos", self._cfg(), "pl", "en", call_backend=fake)
+        self.assertEqual(out, "Fallback result.")
+        self.assertEqual(calls, ["openrouter", "deepseek"])
+
+    def test_whole_chain_fails_returns_original(self):
+        def fake(backend, model, prompt, text, cfg):
+            raise TranslatorError("boom")
+        out = translate_text("Nie tlumacz mnie.", self._cfg(), "pl", "en", call_backend=fake)
+        self.assertEqual(out, "Nie tlumacz mnie.")
+
+    def test_cache_avoids_second_call(self):
+        calls = []
+
+        def fake(backend, model, prompt, text, cfg):
+            calls.append(backend)
+            return "wynik"
+        cfg = self._cfg()
+        translate_text("ala ma kota", cfg, "pl", "pl", call_backend=fake)
+        translate_text("ala ma kota", cfg, "pl", "pl", call_backend=fake)
+        self.assertEqual(len(calls), 1)
+
+    def test_code_fence_preserved_through_translation(self):
+        def fake(backend, model, prompt, text, cfg):
+            return text.replace("Napisz funkcje", "Write a function")  # keeps ⟦0⟧
+
+        cfg = self._cfg()
+        src = "Napisz funkcje:\n```python\nprint(1)\n```\nDzieki."
+        out = translate_text(src, cfg, "pl", "en", call_backend=fake)
+        self.assertIn("print(1)", out)
+        self.assertIn("```python", out)
+
+    def test_english_input_guard_skips_backend(self):
+        cfg = self._cfg()
+
+        def fake(backend, model, prompt, text, cfg):
+            raise AssertionError("must not call backend for English input")
+
+        out = translate_text("Please show me the list of files in this directory and tell me what they are.",
+                             cfg, "pl", "en", call_backend=fake)
+        self.assertEqual(out, "Please show me the list of files in this directory and tell me what they are.")
+
+    def test_empty_text_passthrough(self):
+        def never(*a):
+            raise AssertionError("must not call backend for empty text")
+
+        out = translate_text("", self._cfg(), "pl", "en", call_backend=never)
+        out2 = translate_text("   \n  ", self._cfg(), "pl", "en", call_backend=never)
+        self.assertEqual(out, "")
+        self.assertEqual(out2, "   \n  ")
