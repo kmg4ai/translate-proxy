@@ -364,3 +364,14 @@ class EgressTests(unittest.TestCase):
         body = {"content": [{"type": "text", "text": "Keep this English."}]}
         out = translate_anthropic_nonstream(body, self._cfg(), call_backend=fake)
         self.assertEqual(out["content"][0]["text"], "Keep this English.")
+
+    def test_openai_stream_tool_calls_preserved(self):
+        chunks = [
+            {"id": "a", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"role": "assistant"}}]},
+            {"id": "a", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "t1", "function": {"name": "ls", "arguments": ""}}]}}]},
+            {"id": "a", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        ]
+        out = translate_openai_stream(chunks, self._cfg(), call_backend=self.never())
+        tool_deltas = [c["choices"][0]["delta"].get("tool_calls") for c in out]
+        self.assertTrue(any(td is not None for td in tool_deltas))
+        self.assertTrue(any(c["choices"][0].get("finish_reason") == "tool_calls" for c in out))

@@ -364,6 +364,13 @@ def encode_sse(events):
 
 
 def translate_anthropic_stream(events, cfg, call_backend=None):
+    """Buffer each text content block and emit its translation at block stop.
+
+    The placeholder ("…") is intentionally constant: SSE has no delta retraction, so the
+    whole response is buffered and a single translated delta is emitted at the end; the fixed
+    placeholder signals "translation in progress" while the model's English streams in.
+    Non-text blocks (tool_use, etc.) pass through unchanged.
+    """
     out = []
     buffer = None
     for ev in events:
@@ -399,11 +406,19 @@ def translate_anthropic_stream(events, cfg, call_backend=None):
 
 
 def translate_openai_stream(chunks, cfg, call_backend=None):
+    """Reassemble content deltas and emit the translation as a single chunk.
+
+    The placeholder ("…") is intentionally constant: SSE has no delta retraction, so the
+    whole response is buffered and the translation is emitted in one chunk; the fixed
+    placeholder signals "translation in progress". tool_calls deltas pass through unchanged,
+    between the text chunk and the finish chunk.
+    """
     meta = None
     texts = []
     role = None
     finish = None
     usage = None
+    tool_calls_chunks = []
     for c in chunks:
         if not isinstance(c, dict):
             continue
@@ -417,6 +432,8 @@ def translate_openai_stream(chunks, cfg, call_backend=None):
                     role = delta["role"]
                 if delta.get("content"):
                     texts.append(delta["content"])
+                if delta.get("tool_calls") and not ch.get("finish_reason"):
+                    tool_calls_chunks.append(c)
                 if ch.get("finish_reason"):
                     finish = c
         if c.get("usage"):
@@ -440,7 +457,9 @@ def translate_openai_stream(chunks, cfg, call_backend=None):
         out.append(chunk("", role=role))
     if full and cfg.placeholder:
         out.append(chunk(cfg.placeholder))
-    out.append(chunk(translated))
+    if translated:
+        out.append(chunk(translated))
+    out.extend(tool_calls_chunks)
     if finish:
         out.append(finish)
     if usage:
